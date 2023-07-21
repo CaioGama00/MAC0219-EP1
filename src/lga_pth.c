@@ -1,14 +1,7 @@
 #include "lga_base.h"
-#include "lga_omp.h"
+#include "lga_pth.h"
 #include <pthread.h>
-
-typedef struct {
-    byte *grid_in;
-    byte *grid_out;
-    int grid_size;
-    int start;
-    int end;
-} ThreadArgs;
+#include <stdio.h>
 
 static byte get_next_cell(int i, int j, byte *grid_in, int grid_size) {
     byte next_cell = EMPTY;
@@ -35,52 +28,56 @@ static byte get_next_cell(int i, int j, byte *grid_in, int grid_size) {
     return check_particles_collision(next_cell);
 }
 
-static void *update_thread(void *arg) {
-    ThreadArgs *threadArgs = (ThreadArgs *)arg;
-    byte *grid_in = threadArgs->grid_in;
-    byte *grid_out = threadArgs->grid_out;
-    int grid_size = threadArgs->grid_size;
-    int start = threadArgs->start;
-    int end = threadArgs->end;
-
-    for (int i = start; i < end; i++) {
+static void update(byte *grid_in, byte *grid_out, int grid_size, int start_row, int end_row) {
+    for (int i = start_row; i < end_row; i++) {
         for (int j = 0; j < grid_size; j++) {
-            if (grid_in[ind2d(i, j)] == WALL)
-                grid_out[ind2d(i, j)] = WALL;
+            if (grid_in[ind2d(i,j)] == WALL)
+                grid_out[ind2d(i,j)] = WALL;
             else
-                grid_out[ind2d(i, j)] = get_next_cell(i, j, grid_in, grid_size);
+                grid_out[ind2d(i,j)] = get_next_cell(i, j, grid_in, grid_size);
         }
     }
 
+}
+
+typedef struct {
+    byte *grid_1;
+    byte *grid_2;
+    int grid_size;
+    int start_row;
+    int end_row;
+} ThreadArgs;
+
+void* thread_update(void* args)
+{
+    ThreadArgs* t = (ThreadArgs*) args;
+    update(t->grid_1, t->grid_2, t->grid_size, t->start_row, t->end_row);
     pthread_exit(NULL);
 }
 
-void simulate_pth(byte *grid_1, byte *grid_2, int grid_size, int num_threads) {
+static void iteration_pht(byte *grid_1, byte *grid_2, int grid_size, int num_threads) {
     pthread_t threads[num_threads];
-    ThreadArgs threadArgs[num_threads];
-
+    ThreadArgs thread_args[num_threads];
     int rows_per_thread = grid_size / num_threads;
-
     for (int i = 0; i < num_threads; i++) {
-        int start = i * rows_per_thread;
-        int end = (i == num_threads - 1) ? grid_size : start + rows_per_thread;
-
-        threadArgs[i].grid_in = grid_1;
-        threadArgs[i].grid_out = grid_2;
-        threadArgs[i].grid_size = grid_size;
-        threadArgs[i].start = start;
-        threadArgs[i].end = end;
-
-        pthread_create(&threads[i], NULL, update_thread, (void *)&threadArgs[i]);
+        thread_args[i].grid_1 = grid_1;
+        thread_args[i].grid_2 = grid_2;
+        thread_args[i].grid_size = grid_size;
+        thread_args[i].start_row = i * rows_per_thread;
+        thread_args[i].end_row = (i == num_threads-1) ? grid_size : (i+1)*rows_per_thread;
+        pthread_create(&threads[i], NULL, thread_update, (void*) &thread_args[i]);
     }
-
+    for (int i = 0; i < num_threads; i++) { pthread_join(threads[i], NULL); }
     for (int i = 0; i < num_threads; i++) {
-        pthread_join(threads[i], NULL);
+        thread_args[i].grid_1 = grid_2;
+        thread_args[i].grid_2 = grid_1;
+        pthread_create(&threads[i], NULL, thread_update, (void*) &thread_args[i]);
     }
+    for (int i = 0; i < num_threads; i++) { pthread_join(threads[i], NULL); }
+}
 
-    for (int i = 0; i < ITERATIONS / 2 - 1; i++) {
-        byte *temp = grid_1;
-        grid_1 = grid_2;
-        grid_2 = temp;
+void simulate_pth(byte *grid_1, byte *grid_2, int grid_size, int num_threads) {
+    for (int i = 0; i < ITERATIONS / 2; i++) {
+        iteration_pht(grid_1, grid_2, grid_size, num_threads);
     }
 }
